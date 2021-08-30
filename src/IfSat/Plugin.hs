@@ -255,6 +255,7 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
     solveSimpleGivens givens
     -- Try to solve 'ct', using both Givens and top-level instances.
     residual_wc <- solveSimpleWanteds ( unitBag ct )
+    -- When there are residual Wanteds, we couldn't solve the constraint.
     let
       sat :: Type
       sat
@@ -263,7 +264,7 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
         | otherwise
         = mkTyConTy promotedFalseDataCon
     pure $ mkTyFamAppReduction "IfSat: IsSat" Nominal isSatTyCon [ct_ty] sat
-  tcPluginTrace "IfSat rewriter }" empty
+  tcPluginTrace "IfSat rewriter }" ( ppr redn )
   pure $ TcPluginRewriteTo redn []
 isSatRewriter _ _ _ = pure TcPluginNoRewrite
 
