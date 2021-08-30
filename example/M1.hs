@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-{-# OPTIONS_GHC -fplugin=IfCt.Plugin #-}
+{-# OPTIONS_GHC -fplugin=IfSat.Plugin #-}
 
 module M1 where
 
@@ -14,12 +14,12 @@ import Data.Kind
 
 -- if-instance
 import Data.Constraint.If
-  ( IfCt(ifCt) )
+  ( IfSat(ifSat) )
 
 --------------------------------------------------------------------------------
 
-showFun :: forall (a :: Type). IfCt ( Show ( a -> a ) ) => ( a -> a ) -> String
-showFun = ifCt @( Show (a -> a) ) show ( \ _ -> "<<function>>" )
+showFun :: forall (a :: Type). IfSat ( Show ( a -> a ) ) => ( a -> a ) -> String
+showFun = ifSat @( Show (a -> a) ) show ( \ _ -> "<<function>>" )
 
 test1 :: ( Bool -> Bool ) -> String
 test1 fun = showFun fun

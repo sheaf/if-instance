@@ -1,6 +1,5 @@
 
 {-# LANGUAGE CPP #-}
-
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
@@ -8,7 +7,8 @@
 {-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE TypeApplications #-}
 
-{-# OPTIONS_GHC -fplugin=IfCt.Plugin #-}
+{-# OPTIONS_GHC -fplugin=IfSat.Plugin #-}
+{-# OPTIONS_GHC -dcore-lint #-}
 
 module Main where
 
@@ -24,9 +24,9 @@ import GHC.Exts
   ( withDict )
 #endif
 
--- IfCt
+-- IfSat
 import Data.Constraint.If
-  ( IfCt(ifCt) )
+  ( IfSat(ifSat) )
 
 --------------------------------------------------------------------------------
 
@@ -37,8 +37,8 @@ class MyShow a where
 instance MyShow Int where
   myShow = show
 
-myShowAnything :: forall a. IfCt ( MyShow a ) => a -> String
-myShowAnything = ifCt @( MyShow a ) yes no
+myShowAnything :: forall a. IfSat ( MyShow a ) => a -> String
+myShowAnything = ifSat @( MyShow a ) yes no
   where
     yes :: MyShow a => a -> String
     yes = myShow
@@ -55,7 +55,7 @@ test2 = myShowAnything ( (+) :: Int -> Int -> Int )
 
 data A = A
 
-myShowA :: IfCt ( MyShow A ) => String
+myShowA :: IfSat ( MyShow A ) => String
 myShowA = myShowAnything A
 
 #if MIN_VERSION_ghc(9,4,0)

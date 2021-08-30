@@ -4,11 +4,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-{-# OPTIONS_GHC -fplugin=IfCt.Plugin #-}
+{-# OPTIONS_GHC -fplugin=IfSat.Plugin #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module M2 where
 
 import M1
+
+--------------------------------------------------------------------------------
 
 instance Show ( Bool -> Bool ) where
   show f = show [ f False, f True ]
