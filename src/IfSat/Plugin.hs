@@ -183,15 +183,15 @@ ifSatTrueEvTerm defs@( PluginDefs { ifSatClass } ) ct_ty ct_evTerm = do
   let
     r, a, b :: CoreBndr
     r = mkTyVar r_name liftedTypeKind
-    a = mkLocalId a_name Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty tru) $ mkInvisFunTyMany ct_ty r_ty )
-    b = mkWildValBinder  Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty fls) r_ty )
+    a = mkLocalId a_name Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty True ) $ mkInvisFunTyMany ct_ty r_ty )
+    b = mkWildValBinder  Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty False) r_ty )
     r_ty :: Type
     r_ty = mkTyVarTy r
   pure . EvExpr $
     mkCoreConApps ( classDataCon ifSatClass )
       [ Type ct_ty
       , mkCoreLams [ r, a, b ]
-        ( mkCoreApps ( Var a ) [ sat_co_expr defs ct_ty tru, ct_evTerm ] )
+        ( mkCoreApps ( Var a ) [ sat_co_expr defs ct_ty True, ct_evTerm ] )
       ]
 
 -- Evidence term for @IfSat ct@ when @ct@ isn't satisfied.
@@ -203,36 +203,45 @@ ifSatFalseEvTerm defs@( PluginDefs { ifSatClass } ) ct_ty = do
   let
     r, a, b :: CoreBndr
     r = mkTyVar r_name liftedTypeKind
-    a = mkWildValBinder  Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty tru) $ mkInvisFunTyMany ct_ty r_ty )
-    b = mkLocalId b_name Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty fls) r_ty )
+    a = mkWildValBinder  Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty True ) $ mkInvisFunTyMany ct_ty r_ty )
+    b = mkLocalId b_name Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty False) r_ty )
     r_ty :: Type
     r_ty = mkTyVarTy r
   pure . EvExpr $
     mkCoreConApps ( classDataCon ifSatClass )
       [ Type ct_ty
       , mkCoreLams [ r, a, b ]
-        ( mkCoreApps ( Var b ) [ sat_co_expr defs ct_ty fls ] )
+        ( mkCoreApps ( Var b ) [ sat_co_expr defs ct_ty False ] )
       ]
 
-fls, tru :: Type
-fls = mkTyConTy promotedFalseDataCon
-tru = mkTyConTy promotedTrueDataCon
-
--- @ sat_eqTy defs ct_ty rhs @ represents the type @ IsSat ct ~ rhs @.
-sat_eqTy :: PluginDefs -> Type -> Type -> Type
-sat_eqTy ( PluginDefs { isSatTyCon } ) ct_ty rhs
+-- @ sat_eqTy defs ct_ty b @ represents the type @ IsSat ct ~ b @.
+sat_eqTy :: PluginDefs -> Type -> Bool -> Type
+sat_eqTy ( PluginDefs { isSatTyCon } ) ct_ty booly
   = mkTyConApp eqTyCon
       [ boolTy, mkTyConApp isSatTyCon [ct_ty], rhs ]
+  where
+    rhs :: Type
+    rhs = if booly then tru else fls
 
--- @ sat_co_expr defs ct_ty rhs @ is an expression of type @ IsSat ct ~ rhs @.
-sat_co_expr :: PluginDefs -> Type -> Type -> EvExpr
-sat_co_expr ( PluginDefs { isSatTyCon } ) ct_ty rhs
+-- @ sat_co_expr defs ct_ty b @ is an expression of type @ IsSat ct ~ b @.
+sat_co_expr :: PluginDefs -> Type -> Bool -> EvExpr
+sat_co_expr ( PluginDefs { isSatTyCon } ) ct_ty booly
   = mkCoreConApps eqDataCon
       [ Type boolTy
       , Type $ mkTyConApp isSatTyCon [ ct_ty ]
       , Type rhs
-      , Coercion $ mkPluginUnivCo "IfSat: IsSat" Nominal ( mkTyConApp isSatTyCon [ct_ty] ) rhs
+      , Coercion $
+          mkPluginUnivCo ( "IfSat :" <> show booly )
+          Nominal
+          ( mkTyConApp isSatTyCon [ct_ty] ) rhs
       ]
+  where
+    rhs :: Type
+    rhs = if booly then tru else fls
+
+fls, tru :: Type
+fls = mkTyConTy promotedFalseDataCon
+tru = mkTyConTy promotedTrueDataCon
 
 --------------------------------------------------------------------------------
 
@@ -257,13 +266,15 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
     residual_wc <- solveSimpleWanteds ( unitBag ct )
     -- When there are residual Wanteds, we couldn't solve the constraint.
     let
+      is_sat :: Bool
+      is_sat = isEmptyWC residual_wc
       sat :: Type
       sat
-        | isEmptyWC residual_wc
+        | is_sat
         = mkTyConTy promotedTrueDataCon
         | otherwise
         = mkTyConTy promotedFalseDataCon
-    pure $ mkTyFamAppReduction "IfSat: IsSat" Nominal isSatTyCon [ct_ty] sat
+    pure $ mkTyFamAppReduction ( "IsSat: " <> show is_sat ) Nominal isSatTyCon [ct_ty] sat
   tcPluginTrace "IfSat rewriter }" ( ppr redn )
   pure $ TcPluginRewriteTo redn []
 isSatRewriter _ _ _ = pure TcPluginNoRewrite

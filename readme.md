@@ -93,6 +93,11 @@ showFun not
 In these last two examples, we must solve `IfSat (Show (Bool -> Bool))`.
 Such an instance is in scope in `M2`, so we choose the first branch.
 
+## A type-family too!
+
+If you prefer working at the type-level, this library has got you covered, with the `IsSat` type family.  
+To reduce `IsSat ct`, GHC will first attempt to solve `ct`. If it succeeds, then `IsSat ct` reduces to `True`;
+otherwise, it reduces to `False`. The decision is taken only when GHC decides to reduce the type family.
 
 # Doesn't this library already exist?
 

@@ -1,3 +1,7 @@
+# Version 0.2.1.0 (2021-08-31)
+
+- Require `ghc-tcplugin-api >= 0.5.1.0`.
+
 # Version 0.2.0.0 (2021-08-31)
 
 - Add a type family `IsSat :: Constraint -> Bool`
