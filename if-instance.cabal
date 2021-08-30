@@ -1,0 +1,146 @@
+cabal-version:  3.0
+name:           if-instance
+version:        0.1.0.0
+synopsis:       Branch on whether a constraint is satisfied
+license:        BSD-3-Clause
+build-type:     Simple
+author:         Sam Derbyshire
+maintainer:     Sam Derbyshire
+copyright:      2021 Sam Derbyshire
+homepage:       https://github.com/sheaf/if-instance
+category:       Type System, Plugin
+description:
+
+  This library provides a mechanism that can be used to branch on
+  whether a constraint is satisfied (not limited to typeclass instances,
+  despite the name of the library).
+
+  Usage example:
+
+  @
+
+  {-# OPTIONS_GHC -fplugin=IfCt.Plugin #-}
+
+  module MyModule where
+
+  import Data.Constraint.If ( IfCt(ifCt) )
+
+  hypot :: forall a. ( Floating a, IfCt (FMA a) ) => a -> a -> a
+  hypot = ifCt @(FMA a) withFMA withoutFMA
+    where
+      withFMA :: FMA a => a -> a -> a
+      withFMA a b =
+        let
+          h = sqrt $ fma a a (b * b)
+          h² = h * h
+          a² = a * a
+          x = fma (-b) b (h² - a²) + fma h h (-h²) - fma a a (-a²)
+        in
+          h - x / ( 2 * h )
+      withoutFMA :: a -> a -> a
+      withoutFMA a b = sqrt ( a * a + b * b )
+  @
+
+  Here we select between two ways of computing the hypotenuse
+
+  \[ (a,b) \mapsto \sqrt{a^2+b^2} \]
+
+  based on whether we have access to the fused multiply-add operation
+
+  @ fma :: FMA a => a -> a -> a -> a @
+
+  which computes @ \ a b c -> ( a * b ) + c @ in a single instruction,
+  providing stronger guarantees about precision of the resul.
+
+  A call of the form @hypot \@MyNumberType@ will either use the robust @withFMA@
+  function when an @FMA MyNumberType@ instance is available, or will fallback
+  to the simple @withoutFMA@ implementation when no such instance can be found.
+
+extra-source-files:
+  changelog.md
+
+common common
+
+  build-depends:
+    base
+      >= 4.14.0  && < 4.18,
+    ghc
+      >= 8.10    && < 9.6,
+
+  default-language:
+    Haskell2010
+
+  ghc-options:
+    -Wall
+    -Wcompat
+    -fwarn-missing-local-signatures
+    -fwarn-incomplete-uni-patterns
+    -fwarn-missing-deriving-strategies
+    -fno-warn-unticked-promoted-constructors
+
+library
+
+  import:
+    common
+
+  hs-source-dirs:
+    src
+
+  build-depends:
+    ghc-tcplugin-api
+      >= 0.5.0.0 && < 0.6,
+
+  exposed-modules:
+    Data.Constraint.If
+    IfCt.Plugin
+
+  default-language:
+    Haskell2010
+
+  ghc-options:
+    -Wall
+    -Wcompat
+    -fwarn-missing-local-signatures
+    -fwarn-incomplete-uni-patterns
+    -fwarn-missing-deriving-strategies
+    -fno-warn-unticked-promoted-constructors
+
+library IfCt-Example
+
+  import:
+    common
+
+  hs-source-dirs:
+    example
+
+  build-depends:
+    if-instance
+
+  exposed-modules:
+    M2
+
+  other-modules:
+    M1
+
+  visibility:
+    public
+
+test-suite IfCt-Test
+
+  import:
+    common
+
+  type:
+    exitcode-stdio-1.0
+
+  build-depends:
+    if-instance
+
+  hs-source-dirs:
+    test
+
+  main-is:
+    Main.hs
+
+  ghc-options:
+    -dcore-lint
