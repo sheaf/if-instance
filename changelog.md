@@ -1,3 +1,8 @@
+
+# Version 0.2.1.1 (2021-08-31)
+
+- Minor documentation improvements.
+
 # Version 0.2.1.0 (2021-08-31)
 
 - Require `ghc-tcplugin-api >= 0.5.1.0`.

@@ -49,7 +49,7 @@ import GHC.TcPlugin.API.Internal
 -- Plugin definition.
 
 -- | A type-checking plugin that solves @MyCt ct@ constraints.
--- Theis allows users to branch on whether @ct@ is satisfied.
+-- This allows users to branch on whether @ct@ is satisfied.
 --
 -- To use this plugin, add @{-# OPTIONS_GHC -fplugin=IfSat.Plugin #-}@
 -- to your module header.

@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           if-instance
-version:        0.2.1.0
+version:        0.2.1.1
 synopsis:       Branch on whether a constraint is satisfied
 license:        BSD-3-Clause
 build-type:     Simple
@@ -12,8 +12,7 @@ category:       Type System, Plugin
 description:
 
   This library provides a mechanism that can be used to branch on
-  whether a constraint is satisfied (not limited to typeclass instances,
-  despite the name of the library).
+  whether a constraint is satisfied (not limited to typeclass instances).
 
   Usage example:
 
@@ -29,16 +28,17 @@ description:
   hypot = ifSat @(FMA a) withFMA withoutFMA
     where
       withFMA :: FMA a => a -> a -> a
-      withFMA a b =
+      withFMA x y =
         let
-          h = sqrt $ fma a a (b * b)
+          h = sqrt $ fma x x (y * y)
           h² = h * h
-          a² = a * a
-          x = fma (-b) b (h² - a²) + fma h h (-h²) - fma a a (-a²)
+          x² = x * x
+          u = fma (-y) y (h² - x²) + fma h h (-h²) - fma x x (-x²)
         in
-          h - x / ( 2 * h )
+          h - u / ( 2 * h )
       withoutFMA :: a -> a -> a
-      withoutFMA a b = sqrt ( a * a + b * b )
+      withoutFMA x y = sqrt ( x * x + y * y )
+
   @
 
   Here we select between two ways of computing the hypotenuse function
@@ -46,8 +46,8 @@ description:
 
   @ fma :: FMA a => a -> a -> a -> a @
 
-  which computes @ \\ a b c -> ( a * b ) + c @ in a single instruction,
-  providing stronger guarantees about precision of the resul.
+  which computes @ \\ x y z -> ( x * y ) + z @ in a single instruction,
+  providing stronger guarantees about precision of the result.
 
   A call of the form @hypot \@MyNumberType@ will either use the robust @withFMA@
   function when an @FMA MyNumberType@ instance is available, or will fallback
@@ -60,7 +60,7 @@ common common
 
   build-depends:
     base
-      >= 4.14.0 && < 4.18,
+      >= 4.15.0 && < 4.18,
     ghc
       >= 9.0    && < 9.6,
 

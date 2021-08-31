@@ -19,7 +19,10 @@ branches @yes@ and @no@:
     then the @yes@ branch is selected, which has access to the @ct@ constraint;
   - otherwise, the fallback branch @no@ is selected.
 
-To use this, you will also need to enable the corresponding 'IfSat.Plugin.plugin',
+This module also provides the type family @'IsSat' :: Constraint -> Bool@, which, when reduced,
+will check whether the constraint provided as an argument is satisfied.
+
+To use this module, you will also need to enable the corresponding 'IfSat.Plugin.plugin',
 by adding @\{\-\# OPTIONS_GHC -fplugin=IfSat.Plugin \#\-\}@
 to the header of your module.
 
@@ -83,24 +86,29 @@ After loading @M2@, we get the following results:
 >>> test1 not
 "<<function>>"
 
-In this example, to typecheck @test1@ we need to solve @IfSat (Show (Bool -> Bool))@.
+In this example, to typecheck @test1@ we need to solve @IfSat (Show (Bool -> Bool))@
+inside module @M1@.
 As no instance for @Show (Bool -> Bool)@ is available in @M1@, we pick the second branch,
 resulting in @"\<\<function\>\>"@.
 
 >>> test2 not
 "<<function>>"
 
-In this example, we must solve @IfSat (Show (a -> a))@. There is no such instance in @M2@,
-so we pick the second branch.
+In this example, we must solve @IfSat (Show (a -> a))@ within @M2@. There is no such instance in @M2@,
+so we pick the second branch.  
+It doesn't matter that we are calling @test2@ with a function of type
+@Bool -> Bool@: we had to solve @IfSat (Show (a -> a))@ when type-checking
+the type signature of @test2@.
 
 >>> test3 not
 "[True, False]"
 
->>> showFun not
-"[True, False]"
+In this last example, we must solve @IfSat (Show (Bool -> Bool))@, but as we're in @M2@,
+such an instance is available, so we choose the first branch.
 
-In these last two examples, we must solve @IfSat (Show (Bool -> Bool))@.
-Such an instance is in scope in @M2@, so we choose the first branch.
+Note in particular that @test1@ and @test3@ have the exact same definition (same type signature,
+same body), but produce a different result. This is because the satisfiability check happens in
+different contexts.
 -}
 
 module Data.Constraint.If
@@ -125,10 +133,10 @@ class IfSat ct where
   -- Note: the selection happens at the point in the code where the @IfSat ct@
   -- constraint is solved.
   ifSat :: ( ( IsSat ct ~ True, ct ) => r )
-       -> ( IsSat ct ~ False => r)
-       -> r
+        -> ( IsSat ct ~ False => r )
+        -> r
 
--- | @IsSat ct@ returns @True@ if @ct@ is satified, and @False@ otherwise.
+-- | @IsSat ct@ returns @True@ if @ct@ is satisfied, and @False@ otherwise.
 --
 -- The satisfiability check occurs at the moment of type-family reduction.
 type IsSat :: Constraint -> Bool

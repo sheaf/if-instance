@@ -68,7 +68,8 @@ test1 not
 ```
 > `"<<function>>"`
 
-In this example, to typecheck `test1` we need to solve `IfSat (Show (Bool -> Bool))`.  
+In this example, to typecheck `test1` we need to solve `IfSat (Show (Bool -> Bool))`
+inside module `M1`.  
 As no instance for `Show (Bool -> Bool)` is available in `M1`, we pick the second branch,
 resulting in `"<<function>>"`.
 
@@ -77,27 +78,29 @@ test2 not
 ```
 > `"<<function>>"`
 
-In this example, we must solve `IfSat (Show (a -> a))`. There is no such instance in `M2`,
-so we pick the second branch.
+In this example, we must solve `IfSat (Show (a -> a))` within `M2`.
+There is no such instance in `M2`, so we pick the second branch.  
+It doesn't matter that we are calling `test2` with a function of type
+`Bool -> Bool`: we had to solve `IfSat (Show (a -> a))` when type-checking
+the type signature of `test2`.
 
 ```haskell
 test3 not
 ```
 > `"[True, False]"`
 
-```haskell
-showFun not
-```
-> `"[True, False]"`
+In this last example, we must solve `IfSat (Show (Bool -> Bool))`, but as we're in `M2`,
+such an instance is available, so we choose the first branch.
 
-In these last two examples, we must solve `IfSat (Show (Bool -> Bool))`.
-Such an instance is in scope in `M2`, so we choose the first branch.
+Note in particular that `test1` and `test3` have the exact same definition
+(same type signature, same body), but produce a different result.
+This is because the satisfiability check happens in different contexts.
 
 ## A type-family too!
 
 If you prefer working at the type-level, this library has got you covered, with the `IsSat` type family.  
 To reduce `IsSat ct`, GHC will first attempt to solve `ct`. If it succeeds, then `IsSat ct` reduces to `True`;
-otherwise, it reduces to `False`. The decision is taken only when GHC decides to reduce the type family.
+otherwise, it reduces to `False`. This means that the satisfiability check is performed precisely at the time of type-family reduction.
 
 # Doesn't this library already exist?
 
