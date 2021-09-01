@@ -1,8 +1,12 @@
 
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 
 {-# OPTIONS_GHC -fplugin=IfSat.Plugin #-}
 
@@ -14,7 +18,7 @@ import Data.Kind
 
 -- if-instance
 import Data.Constraint.If
-  ( IfSat, ifSat )
+  ( IfSat, ifSat, IsSat )
 
 --------------------------------------------------------------------------------
 
@@ -23,3 +27,13 @@ showFun = ifSat @( Show (a -> a) ) show ( \ _ -> "<<function>>" )
 
 test1 :: ( Bool -> Bool ) -> String
 test1 fun = showFun fun
+
+class C
+
+type F :: Bool -> Type
+type family F b where
+  F False = Float
+  F True  = String
+
+foo :: Float -> F (IsSat C)
+foo x = x

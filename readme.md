@@ -132,6 +132,38 @@ If you prefer working at the type-level, this library has got you covered, with 
 To reduce `IsSat ct`, GHC will first attempt to solve `ct`. If it succeeds, then `IsSat ct` reduces to `True`;
 otherwise, it reduces to `False`. This means that the satisfiability check is performed precisely at the time of type-family reduction.
 
+This is clearly quite dangerous: the type family application `IsSat ct` might evaluate to `False` in a certain context,
+but then in another module when more instances become available it will switch to evaluating to `True`.  
+This allows us to unsafely coerce between any two types:
+
+```haskell
+module M1 where
+
+type F :: Bool -> Type
+type family F b where
+  F False = Float
+  F True  = Text
+
+class C
+
+foo :: Float -> F (IsSat C)
+foo x = x
+
+----------------------------------------
+
+module M2 where
+
+import M1
+
+instance C
+
+unsafeCoerce :: Float -> Text
+unsafeCoerce x = foo x
+```
+
+To avoid such issues, it's recommended to restrict usage of `IsSat` to internal constraints,
+e.g. a typeclass that is defined internally in a library and isn't exported.
+
 # Doesn't this library already exist?
 
 Yes. Mike Izbicki's [`ifCxt` library](https://github.com/mikeizbicki/ifcxt) inspired this library,

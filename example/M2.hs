@@ -1,5 +1,6 @@
 
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -30,3 +31,8 @@ test =
     , test3 not
     , showFun not
     ]
+
+instance C
+
+unsafeCoerce :: Float -> String
+unsafeCoerce x = foo x
