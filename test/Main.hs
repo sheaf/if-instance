@@ -28,7 +28,7 @@ import GHC.Exts
 
 -- IfSat
 import Data.Constraint.If
-  ( IfSat(ifSat), IsSat )
+  ( IfSat, ifSat, IsSat )
 
 --------------------------------------------------------------------------------
 

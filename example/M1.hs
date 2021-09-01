@@ -14,7 +14,7 @@ import Data.Kind
 
 -- if-instance
 import Data.Constraint.If
-  ( IfSat(ifSat) )
+  ( IfSat, ifSat )
 
 --------------------------------------------------------------------------------
 

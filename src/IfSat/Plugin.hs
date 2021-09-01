@@ -3,6 +3,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE TupleSections #-}
 
 module IfSat.Plugin
   ( plugin )
@@ -26,11 +27,10 @@ import GHC.Data.Bag
 import GHC.Tc.Solver.Interact
   ( solveSimpleGivens, solveSimpleWanteds )
 import GHC.Tc.Solver.Monad
-  ( getTcEvBindsMap, readTcRef, runTcS, runTcSWithEvBinds, traceTcS
+  ( TcS
+  , getTcEvBindsMap, readTcRef, runTcS, runTcSWithEvBinds, traceTcS
 #if MIN_VERSION_ghc(9,2,0)
   , wrapTcS
-#else
-  , TcS
 #endif
   )
 import GHC.Tc.Types
@@ -48,21 +48,21 @@ import GHC.TcPlugin.API.Internal
 --------------------------------------------------------------------------------
 -- Plugin definition.
 
--- | A type-checking plugin that solves @MyCt ct@ constraints.
--- This allows users to branch on whether @ct@ is satisfied.
+-- | A type-checking plugin that solves @ct_l || ct_r@ constraints.
+-- This allows users to branch on whether @ct_l@ is satisfied.
 --
 -- To use this plugin, add @{-# OPTIONS_GHC -fplugin=IfSat.Plugin #-}@
 -- to your module header.
 --
--- A @MyCt ct@ instance is solved by trying to solve @ct@:
+-- A @ct_l || ct_r@  instance is solved by trying to solve @ct_l@:
 --
---   - if solving succeeds, the 'Data.Constraint.If.ifSat' function will
+--   - if solving succeeds, the 'Data.Constraint.If.dispatch' function will
 --     pick the first branch,
---   - otherwise, 'Data.Constraint.If.ifSat' will pick the second branch.
+--   - otherwise, 'Data.Constraint.If.dispatch' will pick the second branch.
 --
 -- This means that the branch selection occurs precisely at the moment
--- at which we solve the @IfSat ct@ constraint.
--- See the documentation of 'Data.Constraint.If.IfSat' for more information.
+-- at which we solve the @ct_l || ct_r@  constraint.
+-- See the documentation of 'Data.Constraint.If.dispatch' for more information.
 plugin :: Plugin
 plugin =
   defaultPlugin
@@ -84,7 +84,7 @@ ifSatTcPlugin =
 
 data PluginDefs
   = PluginDefs
-    { ifSatClass  :: !Class
+    { orClass    :: !Class
     , isSatTyCon :: !TyCon
     }
 
@@ -99,9 +99,9 @@ findModule mb_pkg modName = do
 initPlugin :: TcPluginM Init PluginDefs
 initPlugin = do
   ifSatModule <- findModule Nothing "Data.Constraint.If"
-  ifSatClass  <- tcLookupClass =<< lookupOrig ifSatModule ( mkClsOcc "IfSat" )
+  orClass     <- tcLookupClass =<< lookupOrig ifSatModule ( mkClsOcc "||"    )
   isSatTyCon  <- tcLookupTyCon =<< lookupOrig ifSatModule ( mkTcOcc  "IsSat" )
-  pure $ PluginDefs { ifSatClass, isSatTyCon }
+  pure $ PluginDefs { orClass, isSatTyCon }
 
 --------------------------------------------------------------------------------
 -- Constraint solving.
@@ -118,100 +118,150 @@ solver defs givens wanteds
       pure $ TcPluginOk solveds []
 
 solveWanted :: PluginDefs -> [ Ct ] -> Ct -> TcPluginM Solve ( Maybe ( EvTerm, Ct ) )
-solveWanted defs@( PluginDefs { ifSatClass } ) givens wanted
-  | ClassPred cls [ct_ty] <- classifyPredType ( ctPred wanted )
-  , cls == ifSatClass
+solveWanted defs@( PluginDefs { orClass } ) givens wanted
+  | ClassPred cls [ct_l_ty, ct_r_ty] <- classifyPredType ( ctPred wanted )
+  , cls == orClass
   = do
-    tcPluginTrace "IfSat solver: found IfSat constraint" ( ppr wanted )
-    ct_ev <- newWanted ( ctLoc wanted ) ct_ty
+    tcPluginTrace "IfSat solver: found (||) constraint"
+      ( ppr ct_l_ty $$ ppr ct_r_ty $$ ppr wanted )
+    ct_l_ev <- newWanted ( ctLoc wanted ) ct_l_ty
+    ct_r_ev <- newWanted ( ctLoc wanted ) ct_r_ty
     let
-      ct :: Ct
-      ct = mkNonCanonical ct_ev
-      ct_ev_dest :: TcEvDest
-      ct_ev_dest = ctev_dest ct_ev
+      ct_l, ct_r :: Ct
+      ct_l = mkNonCanonical ct_l_ev
+      ct_r = mkNonCanonical ct_r_ev
+      ct_l_ev_dest, ct_r_ev_dest :: TcEvDest
+      ct_l_ev_dest = ctev_dest ct_l_ev
+      ct_r_ev_dest = ctev_dest ct_r_ev
     evBindsVar <- askEvBinds
     -- Start a new Solver run.
     unsafeLiftTcM $ runTcSWithEvBinds evBindsVar $ do
       -- Add back all the Givens.
       traceTcS "IfSat solver: adding Givens to the inert set" (ppr givens)
       solveSimpleGivens givens
-      -- Try to solve 'ct', using both Givens and top-level instances.
-      _ <- solveSimpleWanteds ( unitBag ct )
-      -- Now look up whether GHC has managed to produce evidence for 'ct'.
-      mb_ct_evTerm <-
-        case ct_ev_dest of
-          HoleDest ( CoercionHole { ch_ref = ref } ) -> do
-            mb_co <- readTcRef ref
-            traceTcS "IfSat solver: coercion hole" (ppr mb_co)
-            case mb_co of
-              Nothing -> pure Nothing
-              Just co -> pure . Just $ evCoercion co
-          EvVarDest ev_var -> do
-            evBindsMap <- getTcEvBindsMap evBindsVar
-            let
-              mb_evBind :: Maybe EvBind
-              mb_evBind = lookupEvBind evBindsMap ev_var
-            traceTcS "IfSat solver: evidence binding" (ppr mb_evBind)
-            case mb_evBind of
-              Nothing      -> pure Nothing
-              Just ev_bind -> pure . Just $ eb_rhs ev_bind
-      wanted_evTerm <- case mb_ct_evTerm of
-        Just ( EvExpr ct_evExpr ) -> do
-          -- We've managed to solve 'ct': use the evidence and take the 'True' branch.
-          traceTcS "IfSat solver: constraint could be solved"
+      -- Try to solve 'ct_l', using both Givens and top-level instances.
+      _ <- solveSimpleWanteds ( unitBag ct_l )
+      -- Now look up whether GHC has managed to produce evidence for 'ct_l'.
+      mb_ct_l_evTerm <- lookupEvTerm evBindsVar ct_l_ev_dest
+      mb_wanted_evTerm <- case mb_ct_l_evTerm of
+        Just ( EvExpr ct_l_evExpr ) -> do
+          -- We've managed to solve 'ct_l': use the evidence and take the 'True' branch.
+          traceTcS "IfSat solver: LHS constraint could be solved"
             ( vcat
-              [ text "ct =" <+> ppr ct_ty
-              , text "ev =" <+> ppr ct_evExpr
+              [ text "ct_l =" <+> ppr ct_l_ty
+              , text "ev   =" <+> ppr ct_l_evExpr
               ]
             )
-          wrapTcS $ ifSatTrueEvTerm defs ct_ty ct_evExpr
+          wrapTcS $ ( Just <$> dispatchTrueEvTerm defs ct_l_ty ct_r_ty ct_l_evExpr )
         _ -> do
-          -- We couldn't solve 'ct': take the 'False' branch.
-          traceTcS "IfSat solver: constraint could not be solved"
-            ( text "ct =" <+> ppr ct_ty )
-          wrapTcS $ ifSatFalseEvTerm defs ct_ty
-      pure $ Just ( wanted_evTerm, wanted )
+          -- We couldn't solve 'ct_l': this means we must solve 'ct_r',
+          -- to provide evidence needed for the 'False' branch.
+          traceTcS "IfSat solver: LHS constraint could not be solved"
+            ( text "ct_l =" <+> ppr ct_l_ty )
+          -- Try to solve 'ct_r', using both Givens and top-level instances.
+          _ <- solveSimpleWanteds ( unitBag ct_r )
+          mb_ct_r_evTerm <- lookupEvTerm evBindsVar ct_r_ev_dest
+          case mb_ct_r_evTerm of
+            Just ( EvExpr ct_r_evExpr ) -> do
+              -- We've managed to solve 'ct_r': use the evidence and take the 'False' branch.
+              traceTcS "IfSat solver: RHS constraint could be solved"
+                ( vcat
+                  [ text "ct_r =" <+> ppr ct_r_ty
+                  , text "ev   =" <+> ppr ct_r_evExpr
+                  ]
+                )
+              wrapTcS $ ( Just <$> dispatchFalseEvTerm defs ct_l_ty ct_r_ty ct_r_evExpr )
+            _ -> do
+              -- We could solve neither 'ct_l' not 'ct_r'.
+              -- This means we can't solve the disjunction constraint.
+              traceTcS "IfSat solver: RHS constraint could not be solved"
+                ( text "ct_r =" <+> ppr ct_r_ty )
+              pure Nothing
+      pure $ ( , wanted ) <$> mb_wanted_evTerm
   | otherwise
   = pure Nothing
 
--- Evidence term for @IfSat ct@ when @ct@ isn't satisfied.
--- IfSat = \ @r (a :: ( IsSat ct ~ True, ct ) => r) (_ :: IsSat ct ~ False => r) -> a isSat_co ct_evTerm
-ifSatTrueEvTerm :: PluginDefs -> Type -> EvExpr -> TcM EvTerm
-ifSatTrueEvTerm defs@( PluginDefs { ifSatClass } ) ct_ty ct_evTerm = do
+-- | Look up whether a 'TcEvDest' has been filled with evidence.
+lookupEvTerm :: EvBindsVar -> TcEvDest -> TcS ( Maybe EvTerm )
+lookupEvTerm _ ( HoleDest ( CoercionHole { ch_ref = ref } ) ) = do
+  mb_co <- readTcRef ref
+  traceTcS "IfSat solver: coercion hole" ( ppr mb_co )
+  case mb_co of
+    Nothing -> pure Nothing
+    Just co -> pure . Just $ evCoercion co
+lookupEvTerm evBindsVar ( EvVarDest ev_var ) = do
+  evBindsMap <- getTcEvBindsMap evBindsVar
+  let
+    mb_evBind :: Maybe EvBind
+    mb_evBind = lookupEvBind evBindsMap ev_var
+  traceTcS "IfSat solver: evidence binding" ( ppr mb_evBind )
+  case mb_evBind of
+    Nothing      -> pure Nothing
+    Just ev_bind -> pure . Just $ eb_rhs ev_bind
+
+-- Evidence term for @ct_l || ct_r@ when @ct_l@ is satisfied.
+--
+-- dispatch =
+--   \ @r
+--     ( a :: ( IsSat ct_l ~ True, ct_l ) => r )
+--     ( _ :: ( IsSat ct_l ~ False, IsSat ct_r ~ True, ct_r ) => r )
+--   -> a ct_l_isSat_co ct_l_evTerm
+dispatchTrueEvTerm :: PluginDefs -> Type -> Type -> EvExpr -> TcM EvTerm
+dispatchTrueEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_l_evTerm = do
   r_name <- newName ( mkTyVarOcc "r" )
   a_name <- newName ( mkVarOcc   "a" )
   let
     r, a, b :: CoreBndr
     r = mkTyVar r_name liftedTypeKind
-    a = mkLocalId a_name Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty True ) $ mkInvisFunTyMany ct_ty r_ty )
-    b = mkWildValBinder  Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty False) r_ty )
+    a = mkLocalId a_name Many
+        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty True, ct_l_ty ] r_ty )
+    b = mkWildValBinder  Many
+        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty False, sat_eqTy defs ct_r_ty True, ct_r_ty ] r_ty )
     r_ty :: Type
     r_ty = mkTyVarTy r
   pure . EvExpr $
-    mkCoreConApps ( classDataCon ifSatClass )
-      [ Type ct_ty
+    mkCoreConApps ( classDataCon orClass )
+      [ Type ct_l_ty
+      , Type ct_r_ty
       , mkCoreLams [ r, a, b ]
-        ( mkCoreApps ( Var a ) [ sat_co_expr defs ct_ty True, ct_evTerm ] )
+        ( mkCoreApps ( Var a )
+          [ sat_co_expr defs ct_l_ty True
+          , ct_l_evTerm
+          ]
+        )
       ]
 
--- Evidence term for @IfSat ct@ when @ct@ isn't satisfied.
--- IfSat = \ @r (_ :: ( IsSat ct ~ True, ct ) => r) (b :: IsSat ct ~ False => r) -> b notSat_co
-ifSatFalseEvTerm :: PluginDefs -> Type -> TcM EvTerm
-ifSatFalseEvTerm defs@( PluginDefs { ifSatClass } ) ct_ty = do
+-- Evidence term for @ct_l || ct_r@ when @ct_l@ isn't satisfied, but @ct_r@ is.
+--
+-- dispatch =
+--   \ @r
+--     ( _ :: ( IsSat ct_l ~ True, ct_l ) => r )
+--     ( b :: ( IsSat ct_l ~ False, IsSat ct_r ~ True, ct_r ) => r )
+--   -> b ct_l_notSat_co ct_r_isSat_co ct_r_evTerm
+dispatchFalseEvTerm :: PluginDefs -> Type -> Type -> EvExpr -> TcM EvTerm
+dispatchFalseEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_r_evExpr = do
   r_name <- newName ( mkTyVarOcc "r" )
   b_name <- newName ( mkVarOcc   "b" )
   let
     r, a, b :: CoreBndr
     r = mkTyVar r_name liftedTypeKind
-    a = mkWildValBinder  Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty True ) $ mkInvisFunTyMany ct_ty r_ty )
-    b = mkLocalId b_name Many ( mkInvisFunTyMany (sat_eqTy defs ct_ty False) r_ty )
+    a = mkWildValBinder  Many
+        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty True, ct_l_ty ] r_ty )
+    b = mkLocalId b_name Many
+        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty False, sat_eqTy defs ct_r_ty True, ct_r_ty ] r_ty )
     r_ty :: Type
     r_ty = mkTyVarTy r
   pure . EvExpr $
-    mkCoreConApps ( classDataCon ifSatClass )
-      [ Type ct_ty
+    mkCoreConApps ( classDataCon orClass )
+      [ Type ct_l_ty
+      , Type ct_r_ty
       , mkCoreLams [ r, a, b ]
-        ( mkCoreApps ( Var b ) [ sat_co_expr defs ct_ty False ] )
+        ( mkCoreApps ( Var b )
+          [ sat_co_expr defs ct_l_ty False
+          , sat_co_expr defs ct_r_ty True
+          , ct_r_evExpr
+          ]
+        )
       ]
 
 -- @ sat_eqTy defs ct_ty b @ represents the type @ IsSat ct ~ b @.

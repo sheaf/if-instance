@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           if-instance
-version:        0.2.1.1
+version:        0.3.0.0
 synopsis:       Branch on whether a constraint is satisfied
 license:        BSD-3-Clause
 build-type:     Simple

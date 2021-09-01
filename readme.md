@@ -7,7 +7,7 @@ This library provides a way to branch on whether a constraint is satisfied:
 
 module MyModule where
 
-import Data.Constraint.If ( IfSat(ifSat) )
+import Data.Constraint.If ( IfSat, ifSat )
 
 hypot :: forall a. ( Floating a, IfSat (FMA a) ) => a -> a -> a
 hypot = ifSat @(FMA a) withFMA withoutFMA
@@ -27,7 +27,14 @@ hypot = ifSat @(FMA a) withFMA withoutFMA
 
 `hypot x y` computes the value of `sqrt( x² + y² )` in a different way
 depending on whether a fused multiply-add operation `fma` is available
-for the type `a`.
+for the type `a`. This makes use of the `ifSat` function:
+
+```haskell
+ifSat :: IfSat c => ( c => r ) -> r -> r
+```
+
+which chooses the first branch when `c` is satisfied, and uses the second branch
+as a fallback otherwise.
 
 ## When does branch selection occur?
 
@@ -96,6 +103,29 @@ Note in particular that `test1` and `test3` have the exact same definition
 (same type signature, same body), but produce a different result.
 This is because the satisfiability check happens in different contexts.
 
+## Using additional constraints in the fallback branch
+
+If you need to use additional constraints in the fallback branch, you can instead use the
+constraint disjunction operator `(||)`, by way of the `dispatch` function:
+
+```haskell
+dispatch :: ( c || d ) => ( c => r ) -> ( d => r ) -> r
+```
+
+The `dispatch` function will select the `c => r` branch when `c` is satisfied,
+and otherwise fall back to the `d => r` branch.  
+As with `ifSat`, the selection occurs precisely when the `c || d` constraint is solved.
+
+This functionality is strictly more general, as `IfSat ct` is the special case in which
+the second constraint is trivially satisfied (using the trivial constraint `() :: Constraint`):
+
+```haskell
+type IfSat ct = ( ct || () )
+
+ifSat :: forall ct r. IfSat ct => ( c => r ) -> r -> r
+ifSat f g = dispatch @ct @() f g
+```
+
 ## A type-family too!
 
 If you prefer working at the type-level, this library has got you covered, with the `IsSat` type family.  
@@ -104,18 +134,19 @@ otherwise, it reduces to `False`. This means that the satisfiability check is pe
 
 # Doesn't this library already exist?
 
-Yes. Mike Izbicki's [`ifCxt` library](https://github.com/mikeizbicki/ifcxt) inspired this library.
+Yes. Mike Izbicki's [`ifCxt` library](https://github.com/mikeizbicki/ifcxt) inspired this library,
+with constraint disjunction `(||)` taken from Noah Luck Easterly's [`constraint-unions`](https://github.com/rampion/constraint-unions).
 
-What's the difference? `ifCxt` requires users to manually declare `IfCxt` instances
-for all the typeclasses they want to work with, e.g. by using Template Haskell.  
+What's the difference? The above libraries require users to manually declare instances
+for the typeclasses they want to work with, e.g. by using Template Haskell.  
 On the other hand, this library only requires users to enable the plugin,
-which directly hooks into GHC to solve the `IfSat` instances, without requiring
-large amounts of instances to be defined by hand.  
+which directly hooks into GHC to solve `c || d` and `IfSat c` constraints,
+without requiring large amounts of instances to be defined by hand.  
 This also means that users have more flexibility: as we saw above, branch selection occurs
-when the `IfSat ct` constraint is discharged, looking at all the information
+when the `c || d` or `IfSat c` constraints are discharged, looking at all the information
 that is available at that point. This includes instance declarations,
 Given constraints, local evidence (e.g. from GADT pattern matches), etc.
 
-Furthermore, this library isn't limited to working with typeclasses and their instances: any constraint
-can be passed to `IfSat`, e.g. an equality constraint involving a type family, which might only be satisfied
-in the presence of further type-family equations.
+Furthermore, this library isn't limited to working with typeclasses and their instances:
+any constraint can be passed to `IfSat`, e.g. an equality constraint involving a type family,
+which might only be satisfied in the presence of further type-family equations.
