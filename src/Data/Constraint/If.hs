@@ -30,8 +30,8 @@ If you don't need additional constraints in the fallback branch, you can also us
 
 > ifSat :: IfSat c => ( c => r ) -> r -> r
 
-This is the special case of 'dispatch' which taes @d@ to be the trivial constraint,
-@d ~ ( () :: Constraint)@.
+This is the special case of 'dispatch' which takes @d@ to be the trivial constraint,
+@d ~ ( () :: Constraint )@.
 
 This module also provides the type family @'IsSat' :: Constraint -> Bool@, which, when reduced,
 will check whether the constraint provided as an argument is satisfied.

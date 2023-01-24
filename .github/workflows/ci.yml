@@ -13,9 +13,10 @@ jobs:
     strategy:
       matrix:
         ghc:
-          - "head"
           - "latest"
-          - "9.0.1"
+          - "9.4.4"
+          - "9.2.5"
+          - "9.0.2"
 
     steps:
     - name: Checkout commit

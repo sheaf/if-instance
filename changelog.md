@@ -1,4 +1,9 @@
 
+# Version 0.3.1.0 (2023-01-24)
+
+- Bumping of version bounds, and support for GHC 9.4 and GHC 9.6.
+  Now requires `ghc-tcplugin-api` 0.9 or above.
+
 # Version 0.3.0.0 (2021-09-01)
 
 - Add the `(||)` constraint disjunction mechanism, with

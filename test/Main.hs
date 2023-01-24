@@ -78,13 +78,13 @@ myShowA = myShowAnything A
 -- Should use the instance locally provided by "withDict".
 test3 :: String
 test3 =
-  withDict @( A -> String ) @( MyShow A )
+  withDict @( MyShow A ) @( A -> String )
     ( \ _ -> "A" )
     myShowA
 
 test3b :: Bool
 test3b =
-  withDict @( A -> String ) @( MyShow A )
+  withDict @( MyShow A ) @( A -> String )
     ( \ _ -> "A" )
     ( boolI @( IsSat ( MyShow A ) ) )
 #endif

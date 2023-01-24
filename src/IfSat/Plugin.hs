@@ -19,9 +19,7 @@ import Unsafe.Coerce
 
 -- ghc
 import GHC.Plugins
-  ( Plugin(..)
-  , defaultPlugin, purePlugin
-  )
+  hiding ( TcPlugin, (<>) )
 import GHC.Data.Bag
   ( unitBag )
 import GHC.Tc.Solver.Interact
@@ -37,8 +35,6 @@ import GHC.Tc.Types
   ( TcM )
 import GHC.Tc.Types.Constraint
   ( isEmptyWC )
-import GHC.Utils.Outputable
-  ( (<+>), ($$), empty, text, vcat )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
@@ -88,9 +84,9 @@ data PluginDefs
     , isSatTyCon :: !TyCon
     }
 
-findModule :: MonadTcPlugin m => Maybe String -> String -> m Module
-findModule mb_pkg modName = do
-  findResult <- findImportedModule ( mkModuleName modName ) ( fmap fsLit mb_pkg )
+findModule :: MonadTcPlugin m => String -> m Module
+findModule modName = do
+  findResult <- findImportedModule ( mkModuleName modName ) NoPkgQual
   case findResult of
     Found _ res     -> pure res
     FoundMultiple _ -> error $ "IfSat plugin: found multiple modules named " <> modName <> "."
@@ -98,7 +94,7 @@ findModule mb_pkg modName = do
 
 initPlugin :: TcPluginM Init PluginDefs
 initPlugin = do
-  ifSatModule <- findModule Nothing "Data.Constraint.If"
+  ifSatModule <- findModule "Data.Constraint.If"
   orClass     <- tcLookupClass =<< lookupOrig ifSatModule ( mkClsOcc "||"    )
   isSatTyCon  <- tcLookupTyCon =<< lookupOrig ifSatModule ( mkTcOcc  "IsSat" )
   pure $ PluginDefs { orClass, isSatTyCon }
@@ -213,10 +209,10 @@ dispatchTrueEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_l_evTerm =
   let
     r, a, b :: CoreBndr
     r = mkTyVar r_name liftedTypeKind
-    a = mkLocalId a_name Many
-        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty True, ct_l_ty ] r_ty )
-    b = mkWildValBinder  Many
-        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty False, sat_eqTy defs ct_r_ty True, ct_r_ty ] r_ty )
+    a = mkLocalId a_name ManyTy
+        ( mkInvisFunTys [ sat_eqTy defs ct_l_ty True, ct_l_ty ] r_ty )
+    b = mkWildValBinder  ManyTy
+        ( mkInvisFunTys [ sat_eqTy defs ct_l_ty False, sat_eqTy defs ct_r_ty True, ct_r_ty ] r_ty )
     r_ty :: Type
     r_ty = mkTyVarTy r
   pure . EvExpr $
@@ -245,10 +241,10 @@ dispatchFalseEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_r_evExpr 
   let
     r, a, b :: CoreBndr
     r = mkTyVar r_name liftedTypeKind
-    a = mkWildValBinder  Many
-        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty True, ct_l_ty ] r_ty )
-    b = mkLocalId b_name Many
-        ( mkInvisFunTysMany [ sat_eqTy defs ct_l_ty False, sat_eqTy defs ct_r_ty True, ct_r_ty ] r_ty )
+    a = mkWildValBinder  ManyTy
+        ( mkInvisFunTys [ sat_eqTy defs ct_l_ty True, ct_l_ty ] r_ty )
+    b = mkLocalId b_name ManyTy
+        ( mkInvisFunTys [ sat_eqTy defs ct_l_ty False, sat_eqTy defs ct_r_ty True, ct_r_ty ] r_ty )
     r_ty :: Type
     r_ty = mkTyVarTy r
   pure . EvExpr $
