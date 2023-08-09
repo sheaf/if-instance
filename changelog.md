@@ -1,4 +1,9 @@
 
+# Version 0.4.0.0 (2023-08-09)
+
+- Only consider a constraint solved when there are no residual constraints.
+- Bump version bounds for `ghc-tcplugin-api`.
+
 # Version 0.3.1.0 (2023-01-24)
 
 - Bumping of version bounds, and support for GHC 9.4 and GHC 9.6.

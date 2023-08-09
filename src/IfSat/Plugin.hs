@@ -86,7 +86,9 @@ data PluginDefs
 
 findModule :: MonadTcPlugin m => String -> m Module
 findModule modName = do
-  findResult <- findImportedModule ( mkModuleName modName ) NoPkgQual
+  let mod_name = mkModuleName modName
+  pkg_qual   <- resolveImport      mod_name Nothing
+  findResult <- findImportedModule mod_name pkg_qual
   case findResult of
     Found _ res     -> pure res
     FoundMultiple _ -> error $ "IfSat plugin: found multiple modules named " <> modName <> "."
@@ -136,11 +138,13 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
       traceTcS "IfSat solver: adding Givens to the inert set" (ppr givens)
       solveSimpleGivens givens
       -- Try to solve 'ct_l', using both Givens and top-level instances.
-      _ <- solveSimpleWanteds ( unitBag ct_l )
+      residual_ct_l <- solveSimpleWanteds ( unitBag ct_l )
       -- Now look up whether GHC has managed to produce evidence for 'ct_l'.
       mb_ct_l_evTerm <- lookupEvTerm evBindsVar ct_l_ev_dest
       mb_wanted_evTerm <- case mb_ct_l_evTerm of
-        Just ( EvExpr ct_l_evExpr ) -> do
+        Just ( EvExpr ct_l_evExpr )
+          | isEmptyWC residual_ct_l
+          -> do
           -- We've managed to solve 'ct_l': use the evidence and take the 'True' branch.
           traceTcS "IfSat solver: LHS constraint could be solved"
             ( vcat
@@ -152,26 +156,28 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
         _ -> do
           -- We couldn't solve 'ct_l': this means we must solve 'ct_r',
           -- to provide evidence needed for the 'False' branch.
-          traceTcS "IfSat solver: LHS constraint could not be solved"
-            ( text "ct_l =" <+> ppr ct_l_ty )
+          traceTcS "IfSat solver: LHS constraint could not be solved" $
+            vcat [ text "ct_l =" <+> ppr ct_l_ty
+                 , text "residual_ct_l =" <+> ppr residual_ct_l ]
           -- Try to solve 'ct_r', using both Givens and top-level instances.
-          _ <- solveSimpleWanteds ( unitBag ct_r )
+          residual_ct_r <- solveSimpleWanteds ( unitBag ct_r )
           mb_ct_r_evTerm <- lookupEvTerm evBindsVar ct_r_ev_dest
           case mb_ct_r_evTerm of
-            Just ( EvExpr ct_r_evExpr ) -> do
+            Just ( EvExpr ct_r_evExpr )
+              | isEmptyWC residual_ct_r
+              -> do
               -- We've managed to solve 'ct_r': use the evidence and take the 'False' branch.
-              traceTcS "IfSat solver: RHS constraint could be solved"
-                ( vcat
-                  [ text "ct_r =" <+> ppr ct_r_ty
-                  , text "ev   =" <+> ppr ct_r_evExpr
-                  ]
-                )
+              traceTcS "IfSat solver: RHS constraint could be solved" $
+                vcat [ text "ct_r =" <+> ppr ct_r_ty
+                     , text "ev   =" <+> ppr ct_r_evExpr
+                     ]
               wrapTcS $ ( Just <$> dispatchFalseEvTerm defs ct_l_ty ct_r_ty ct_r_evExpr )
             _ -> do
               -- We could solve neither 'ct_l' not 'ct_r'.
               -- This means we can't solve the disjunction constraint.
-              traceTcS "IfSat solver: RHS constraint could not be solved"
-                ( text "ct_r =" <+> ppr ct_r_ty )
+              traceTcS "IfSat solver: RHS constraint could not be solved" $
+                vcat [ text "ct_r =" <+> ppr ct_r_ty
+                     , text "residual ct_r =" <+> ppr residual_ct_r ]
               pure Nothing
       pure $ ( , wanted ) <$> mb_wanted_evTerm
   | otherwise

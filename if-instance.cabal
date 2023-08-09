@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           if-instance
-version:        0.3.1.0
+version:        0.4.0.0
 synopsis:       Branch on whether a constraint is satisfied
 license:        BSD-3-Clause
 build-type:     Simple
@@ -85,7 +85,7 @@ library
 
   build-depends:
     ghc-tcplugin-api
-      >= 0.9 && < 0.10,
+      >= 0.10 && < 0.11,
 
   exposed-modules:
     Data.Constraint.If
@@ -135,3 +135,7 @@ test-suite if-instance-test
 
   main-is:
     Main.hs
+
+  other-modules:
+    Framework
+    Tests
