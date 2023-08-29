@@ -3,9 +3,13 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NamedWildCards #-}
+{-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 {-# OPTIONS_GHC -fplugin=IfSat.Plugin #-}
 {-# OPTIONS_GHC -dcore-lint #-}
@@ -19,6 +23,7 @@ module Tests
   , test3, test3b
 #endif
   , test4, test4b
+  , test5
   )
   where
 
@@ -32,7 +37,7 @@ import GHC.Exts
 
 -- IfSat
 import Data.Constraint.If
-  ( IfSat, ifSat, IsSat )
+  ( type (||), IfSat, ifSat, IsSat )
 
 --------------------------------------------------------------------------------
 
@@ -99,3 +104,18 @@ test4 = myShowA
 
 test4b :: Bool
 test4b = boolI @( IsSat ( MyShow A ) )
+
+--------------------------------------------------------------------------------
+
+type Stuck :: Type -> Type
+type family Stuck a where
+
+test5_aux :: forall a
+          .  ( ( a ~ Bool, Stuck a ~ Int ) || ( a ~ Char ) )
+          => a -> a
+test5_aux x = x
+
+test5 :: Char
+test5 = test5_aux 'x'
+  -- Check that we correctly backtrack out of "a ~ Bool" and end up
+  -- unifying "a := Char".

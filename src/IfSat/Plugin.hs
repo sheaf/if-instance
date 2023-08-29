@@ -10,6 +10,10 @@ module IfSat.Plugin
   where
 
 -- base
+import Control.Monad
+  ( filterM )
+import Data.Foldable
+  ( for_ )
 import Data.Maybe
   ( catMaybes )
 #if !MIN_VERSION_ghc(9,2,0)
@@ -22,11 +26,15 @@ import GHC.Plugins
   hiding ( TcPlugin, (<>) )
 import GHC.Data.Bag
   ( unitBag )
+#if MIN_VERSION_ghc(9,8,0)
+import GHC.Tc.Solver.Solve
+  ( solveSimpleGivens, solveSimpleWanteds )
+#else
 import GHC.Tc.Solver.Interact
   ( solveSimpleGivens, solveSimpleWanteds )
+#endif
 import GHC.Tc.Solver.Monad
-  ( TcS
-  , getTcEvBindsMap, readTcRef, runTcS, runTcSWithEvBinds, traceTcS
+  ( runTcS, runTcSWithEvBinds, traceTcS
 #if MIN_VERSION_ghc(9,2,0)
   , wrapTcS
 #endif
@@ -35,6 +43,12 @@ import GHC.Tc.Types
   ( TcM )
 import GHC.Tc.Types.Constraint
   ( isEmptyWC )
+import GHC.Tc.Utils.TcType
+  ( MetaDetails(..), metaTyVarRef
+  , tyCoVarsOfTypeList
+  )
+import GHC.Tc.Utils.TcMType
+  ( isUnfilledMetaTyVar )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
@@ -131,12 +145,22 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
       ct_l_ev_dest, ct_r_ev_dest :: TcEvDest
       ct_l_ev_dest = ctev_dest ct_l_ev
       ct_r_ev_dest = ctev_dest ct_r_ev
+
     evBindsVar <- askEvBinds
     -- Start a new Solver run.
     unsafeLiftTcM $ runTcSWithEvBinds evBindsVar $ do
       -- Add back all the Givens.
       traceTcS "IfSat solver: adding Givens to the inert set" (ppr givens)
       solveSimpleGivens givens
+
+      -- Keep track of the current solver state in order to backtrack
+      -- in the event that our attempt at solving 'ct_l' fails.
+      ct_l_unfilled_metas <- wrapTcS
+                           $ filterM isUnfilledMetaTyVar
+                           $ tyCoVarsOfTypeList ct_l_ty
+      inert_givens <- getInertSet
+      ev_binds0 <- getTcEvBindsMap evBindsVar
+
       -- Try to solve 'ct_l', using both Givens and top-level instances.
       residual_ct_l <- solveSimpleWanteds ( unitBag ct_l )
       -- Now look up whether GHC has managed to produce evidence for 'ct_l'.
@@ -159,6 +183,17 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
           traceTcS "IfSat solver: LHS constraint could not be solved" $
             vcat [ text "ct_l =" <+> ppr ct_l_ty
                  , text "residual_ct_l =" <+> ppr residual_ct_l ]
+
+          -- Reset the solver state to before we attempted to solve 'ct_l':
+          --
+          --  - reset the inert set,
+          --  - reset the EvBinds,
+          --  - undo any type variable unifications that happened.
+          setInertSet inert_givens
+          setTcEvBindsMap evBindsVar ev_binds0
+          wrapTcS $ for_ ct_l_unfilled_metas \ meta ->
+            writeTcRef ( metaTyVarRef meta ) Flexi
+
           -- Try to solve 'ct_r', using both Givens and top-level instances.
           residual_ct_r <- solveSimpleWanteds ( unitBag ct_r )
           mb_ct_r_evTerm <- lookupEvTerm evBindsVar ct_r_ev_dest
@@ -186,7 +221,7 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
 -- | Look up whether a 'TcEvDest' has been filled with evidence.
 lookupEvTerm :: EvBindsVar -> TcEvDest -> TcS ( Maybe EvTerm )
 lookupEvTerm _ ( HoleDest ( CoercionHole { ch_ref = ref } ) ) = do
-  mb_co <- readTcRef ref
+  mb_co <- wrapTcS $ readTcRef ref
   traceTcS "IfSat solver: coercion hole" ( ppr mb_co )
   case mb_co of
     Nothing -> pure Nothing

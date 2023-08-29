@@ -1,7 +1,17 @@
 
+# Version 0.5.0.0 (2023-08-09)
+
+- Add a fixity declaration for `(||)` (`infixr 2`, matching term-level disjunction).
+
+- Reset the GHC solver monad state after failing to solve the LHS constraint in
+  a disjunction.
+
+- Require `ghc-tcplugin-api >= 0.11`.
+
 # Version 0.4.0.0 (2023-08-09)
 
 - Only consider a constraint solved when there are no residual constraints.
+
 - Bump version bounds for `ghc-tcplugin-api`.
 
 # Version 0.3.1.0 (2023-01-24)

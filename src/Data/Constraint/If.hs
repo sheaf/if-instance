@@ -135,7 +135,7 @@ import Data.Kind
 
 --------------------------------------------------------------------------------
 
-
+infixr 2 ||
 type (||) :: Constraint -> Constraint -> Constraint
 class c || d where
   -- | @dispatch \@c \@d a b@ returns @a@ if the constraint @c@ is satisfied,
