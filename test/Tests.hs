@@ -16,6 +16,8 @@
 
 {-# OPTIONS_GHC -fno-specialise #-}
 
+{-# OPTIONS_GHC -Wno-partial-type-signatures #-}
+
 module Tests
   ( test1, test1b
   , test2, test2b
@@ -23,7 +25,7 @@ module Tests
   , test3, test3b
 #endif
   , test4, test4b
-  , test5
+  , test5a, test5b
   )
   where
 
@@ -115,7 +117,9 @@ test5_aux :: forall a
           => a -> a
 test5_aux x = x
 
-test5 :: Char
-test5 = test5_aux 'x'
+test5a :: Char
+test5a = test5_aux 'x'
+test5b :: _char -> _char
+test5b = test5_aux
   -- Check that we correctly backtrack out of "a ~ Bool" and end up
   -- unifying "a := Char".

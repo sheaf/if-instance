@@ -12,7 +12,7 @@ import Tests
   , test3, test3b
 #endif
   , test4, test4b
-  , test5
+  , test5a, test5b
   )
 
 --------------------------------------------------------------------------------
@@ -29,7 +29,8 @@ tests =
 #endif
   , Test "test4"  test4  "<<no MyShow instance>>"
   , Test "test4b" test4b False
-  , Test "test5"  test5  'x'
+  , Test "test5a" test5a  'x'
+  , Test "test5b" (test5b 'y') 'y'
   ]
 
 main :: IO ()

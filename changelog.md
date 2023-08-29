@@ -1,5 +1,11 @@
 
-# Version 0.5.0.0 (2023-08-09)
+# Version 0.5.1.0 (2023-08-30)
+
+- Be more thorough when resetting GHC solver monad state. This should ensure
+  transparent backtracking after giving up on the LHS of a disjunction
+  constraint.
+
+# Version 0.5.0.0 (2023-08-29)
 
 - Add a fixity declaration for `(||)` (`infixr 2`, matching term-level disjunction).
 

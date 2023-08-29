@@ -16,17 +16,13 @@ import Data.Foldable
   ( for_ )
 import Data.Maybe
   ( catMaybes )
-#if !MIN_VERSION_ghc(9,2,0)
-import Unsafe.Coerce
-  ( unsafeCoerce )
-#endif
 
 -- ghc
 import GHC.Plugins
   hiding ( TcPlugin, (<>) )
 import GHC.Data.Bag
   ( unitBag )
-#if MIN_VERSION_ghc(9,8,0)
+#if MIN_VERSION_ghc(9,7,0)
 import GHC.Tc.Solver.Solve
   ( solveSimpleGivens, solveSimpleWanteds )
 #else
@@ -34,11 +30,7 @@ import GHC.Tc.Solver.Interact
   ( solveSimpleGivens, solveSimpleWanteds )
 #endif
 import GHC.Tc.Solver.Monad
-  ( runTcS, runTcSWithEvBinds, traceTcS
-#if MIN_VERSION_ghc(9,2,0)
-  , wrapTcS
-#endif
-  )
+  ( runTcS, runTcSWithEvBinds, traceTcS )
 import GHC.Tc.Types
   ( TcM )
 import GHC.Tc.Types.Constraint
@@ -54,6 +46,10 @@ import GHC.Tc.Utils.TcMType
 import GHC.TcPlugin.API
 import GHC.TcPlugin.API.Internal
   ( unsafeLiftTcM )
+
+-- if-instance
+import IfSat.Plugin.Compat
+  ( wrapTcS, getRestoreTcS )
 
 --------------------------------------------------------------------------------
 -- Plugin definition.
@@ -147,7 +143,7 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
       ct_r_ev_dest = ctev_dest ct_r_ev
 
     evBindsVar <- askEvBinds
-    -- Start a new Solver run.
+    -- Start a new constraint solver run.
     unsafeLiftTcM $ runTcSWithEvBinds evBindsVar $ do
       -- Add back all the Givens.
       traceTcS "IfSat solver: adding Givens to the inert set" (ppr givens)
@@ -158,11 +154,11 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
       ct_l_unfilled_metas <- wrapTcS
                            $ filterM isUnfilledMetaTyVar
                            $ tyCoVarsOfTypeList ct_l_ty
-      inert_givens <- getInertSet
-      ev_binds0 <- getTcEvBindsMap evBindsVar
+      restoreTcS <- getRestoreTcS
 
       -- Try to solve 'ct_l', using both Givens and top-level instances.
       residual_ct_l <- solveSimpleWanteds ( unitBag ct_l )
+
       -- Now look up whether GHC has managed to produce evidence for 'ct_l'.
       mb_ct_l_evTerm <- lookupEvTerm evBindsVar ct_l_ev_dest
       mb_wanted_evTerm <- case mb_ct_l_evTerm of
@@ -184,15 +180,14 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
             vcat [ text "ct_l =" <+> ppr ct_l_ty
                  , text "residual_ct_l =" <+> ppr residual_ct_l ]
 
-          -- Reset the solver state to before we attempted to solve 'ct_l':
-          --
-          --  - reset the inert set,
-          --  - reset the EvBinds,
-          --  - undo any type variable unifications that happened.
-          setInertSet inert_givens
-          setTcEvBindsMap evBindsVar ev_binds0
+          -- Reset the solver state to before we attempted to solve 'ct_l',
+          -- and undo any type variable unifications that happened.
+          restoreTcS
           wrapTcS $ for_ ct_l_unfilled_metas \ meta ->
             writeTcRef ( metaTyVarRef meta ) Flexi
+          ct_r_unfilled_metas <- wrapTcS
+                               $ filterM isUnfilledMetaTyVar
+                               $ tyCoVarsOfTypeList ct_r_ty
 
           -- Try to solve 'ct_r', using both Givens and top-level instances.
           residual_ct_r <- solveSimpleWanteds ( unitBag ct_r )
@@ -212,7 +207,14 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
               -- This means we can't solve the disjunction constraint.
               traceTcS "IfSat solver: RHS constraint could not be solved" $
                 vcat [ text "ct_r =" <+> ppr ct_r_ty
-                     , text "residual ct_r =" <+> ppr residual_ct_r ]
+                     , text "residualct_r =" <+> ppr residual_ct_r ]
+
+              -- Reset the solver state to before we attempted to solve 'ct_r',
+              -- and undo any type variable unifications that happened.
+              restoreTcS
+              wrapTcS $ for_ ct_r_unfilled_metas \ meta ->
+                writeTcRef ( metaTyVarRef meta ) Flexi
+
               pure Nothing
       pure $ ( , wanted ) <$> mb_wanted_evTerm
   | otherwise
@@ -346,11 +348,27 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
     ct = mkNonCanonical ct_ev
   -- Start a new Solver run.
   ( redn, _ ) <- unsafeLiftTcM $ runTcS $ do
+
     -- Add back all the Givens.
     traceTcS "IfSat rewriter: adding Givens to the inert set" (ppr givens)
     solveSimpleGivens givens
+
+    -- Keep track of the current solver state in order to undo any
+    -- side-effects after calling 'solveSimpleWanteds' on 'ct'.
+    ct_unfilled_metas <- wrapTcS
+                       $ filterM isUnfilledMetaTyVar
+                       $ tyCoVarsOfTypeList ct_ty
+    restoreTcS <- getRestoreTcS
+
     -- Try to solve 'ct', using both Givens and top-level instances.
     residual_wc <- solveSimpleWanteds ( unitBag ct )
+
+    -- Reset the solver state to before we attempted to solve 'ct',
+    -- and undo any type variable unifications that happened.
+    restoreTcS
+    wrapTcS $ for_ ct_unfilled_metas \ meta ->
+      writeTcRef ( metaTyVarRef meta ) Flexi
+
     -- When there are residual Wanteds, we couldn't solve the constraint.
     let
       is_sat :: Bool
@@ -362,13 +380,8 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
         | otherwise
         = mkTyConTy promotedFalseDataCon
     pure $ mkTyFamAppReduction ( "IsSat: " <> show is_sat ) Nominal isSatTyCon [ct_ty] sat
+
   tcPluginTrace "IfSat rewriter }" ( ppr redn )
   pure $ TcPluginRewriteTo redn []
+
 isSatRewriter _ _ _ = pure TcPluginNoRewrite
-
---------------------------------------------------------------------------------
-
-#if !MIN_VERSION_ghc(9,2,0)
-wrapTcS :: TcM a -> TcS a
-wrapTcS = unsafeCoerce const
-#endif
