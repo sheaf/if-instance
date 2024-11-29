@@ -15,7 +15,7 @@ import Control.Monad
 import Data.Foldable
   ( for_ )
 import Data.Maybe
-  ( catMaybes )
+  ( catMaybes, mapMaybe )
 
 -- ghc
 import GHC.Plugins
@@ -30,17 +30,17 @@ import GHC.Tc.Solver.Interact
   ( solveSimpleGivens, solveSimpleWanteds )
 #endif
 import GHC.Tc.Solver.Monad
-  ( runTcS, runTcSWithEvBinds, traceTcS )
+  ( runTcSWithEvBinds, traceTcS )
 import GHC.Tc.Types
   ( TcM )
 import GHC.Tc.Types.Constraint
-  ( isEmptyWC )
+  ( isEmptyWC, CtEvidence (..), ctEvEvId )
 import GHC.Tc.Utils.TcType
   ( MetaDetails(..), metaTyVarRef
   , tyCoVarsOfTypeList
   )
 import GHC.Tc.Utils.TcMType
-  ( isUnfilledMetaTyVar )
+  ( isUnfilledMetaTyVar, newTcEvBinds )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
@@ -139,8 +139,8 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
       ct_l = mkNonCanonical ct_l_ev
       ct_r = mkNonCanonical ct_r_ev
       ct_l_ev_dest, ct_r_ev_dest :: TcEvDest
-      ct_l_ev_dest = ctev_dest ct_l_ev
-      ct_r_ev_dest = ctev_dest ct_r_ev
+      ct_l_ev_dest = wantedEvDest ct_l_ev
+      ct_r_ev_dest = wantedEvDest ct_r_ev
 
     evBindsVar <- askEvBinds
     -- Start a new constraint solver run.
@@ -172,7 +172,7 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
               , text "ev   =" <+> ppr ct_l_evExpr
               ]
             )
-          wrapTcS $ ( Just <$> dispatchTrueEvTerm defs ct_l_ty ct_r_ty ct_l_evExpr )
+          wrapTcS $ ( Just <$> dispatchTrueEvTerm defs givens ct_l_ty ct_r_ty ct_l_evExpr )
         _ -> do
           -- We couldn't solve 'ct_l': this means we must solve 'ct_r',
           -- to provide evidence needed for the 'False' branch.
@@ -201,7 +201,7 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
                 vcat [ text "ct_r =" <+> ppr ct_r_ty
                      , text "ev   =" <+> ppr ct_r_evExpr
                      ]
-              wrapTcS $ ( Just <$> dispatchFalseEvTerm defs ct_l_ty ct_r_ty ct_r_evExpr )
+              wrapTcS $ ( Just <$> dispatchFalseEvTerm defs givens ct_l_ty ct_r_ty ct_r_evExpr )
             _ -> do
               -- We could solve neither 'ct_l' not 'ct_r'.
               -- This means we can't solve the disjunction constraint.
@@ -245,8 +245,8 @@ lookupEvTerm evBindsVar ( EvVarDest ev_var ) = do
 --     ( a :: ( IsSat ct_l ~ True, ct_l ) => r )
 --     ( _ :: ( IsSat ct_l ~ False, IsSat ct_r ~ True, ct_r ) => r )
 --   -> a ct_l_isSat_co ct_l_evTerm
-dispatchTrueEvTerm :: PluginDefs -> Type -> Type -> EvExpr -> TcM EvTerm
-dispatchTrueEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_l_evTerm = do
+dispatchTrueEvTerm :: PluginDefs -> [ Ct ] -> Type -> Type -> EvExpr -> TcM EvTerm
+dispatchTrueEvTerm defs@( PluginDefs { orClass } ) givens ct_l_ty ct_r_ty ct_l_evTerm = do
   r_name <- newName ( mkTyVarOcc "r" )
   a_name <- newName ( mkVarOcc   "a" )
   let
@@ -264,7 +264,7 @@ dispatchTrueEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_l_evTerm =
       , Type ct_r_ty
       , mkCoreLams [ r, a, b ]
         ( mkCoreApps ( Var a )
-          [ sat_co_expr defs ct_l_ty True
+          [ sat_co_expr defs ct_l_ty ( usedGivenCoercions givens ct_l_evTerm ) True
           , ct_l_evTerm
           ]
         )
@@ -277,8 +277,8 @@ dispatchTrueEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_l_evTerm =
 --     ( _ :: ( IsSat ct_l ~ True, ct_l ) => r )
 --     ( b :: ( IsSat ct_l ~ False, IsSat ct_r ~ True, ct_r ) => r )
 --   -> b ct_l_notSat_co ct_r_isSat_co ct_r_evTerm
-dispatchFalseEvTerm :: PluginDefs -> Type -> Type -> EvExpr -> TcM EvTerm
-dispatchFalseEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_r_evExpr = do
+dispatchFalseEvTerm :: PluginDefs -> [Ct] -> Type -> Type -> EvExpr -> TcM EvTerm
+dispatchFalseEvTerm defs@( PluginDefs { orClass } ) givens ct_l_ty ct_r_ty ct_r_evExpr = do
   r_name <- newName ( mkTyVarOcc "r" )
   b_name <- newName ( mkVarOcc   "b" )
   let
@@ -296,14 +296,17 @@ dispatchFalseEvTerm defs@( PluginDefs { orClass } ) ct_l_ty ct_r_ty ct_r_evExpr 
       , Type ct_r_ty
       , mkCoreLams [ r, a, b ]
         ( mkCoreApps ( Var b )
-          [ sat_co_expr defs ct_l_ty False
-          , sat_co_expr defs ct_r_ty True
+          [ sat_co_expr defs ct_l_ty [] False
+            --                       ^^
+            -- NB: GHC has no notion of apartness constraints, so there is
+            -- no evidence we can provide for why we failed to solve a constraint.
+          , sat_co_expr defs ct_r_ty ( usedGivenCoercions givens ct_r_evExpr ) True
           , ct_r_evExpr
           ]
         )
       ]
 
--- @ sat_eqTy defs ct_ty b @ represents the type @ IsSat ct ~ b @.
+-- The type @IsSat ct ~ b@.
 sat_eqTy :: PluginDefs -> Type -> Bool -> Type
 sat_eqTy ( PluginDefs { isSatTyCon } ) ct_ty booly
   = mkTyConApp eqTyCon
@@ -312,17 +315,17 @@ sat_eqTy ( PluginDefs { isSatTyCon } ) ct_ty booly
     rhs :: Type
     rhs = if booly then tru else fls
 
--- @ sat_co_expr defs ct_ty b @ is an expression of type @ IsSat ct ~ b @.
-sat_co_expr :: PluginDefs -> Type -> Bool -> EvExpr
-sat_co_expr ( PluginDefs { isSatTyCon } ) ct_ty booly
+-- Construct an expression of type @IsSat ct ~ b@.
+sat_co_expr :: PluginDefs -> Type -> [Coercion] -> Bool -> EvExpr
+sat_co_expr ( PluginDefs { isSatTyCon } ) ct_ty deps booly
   = mkCoreConApps eqDataCon
       [ Type boolTy
       , Type $ mkTyConApp isSatTyCon [ ct_ty ]
       , Type rhs
       , Coercion $
           mkPluginUnivCo ( "IfSat :" <> show booly )
-          Nominal
-          ( mkTyConApp isSatTyCon [ct_ty] ) rhs
+            Nominal deps
+            ( mkTyConApp isSatTyCon [ct_ty] ) rhs
       ]
   where
     rhs :: Type
@@ -332,13 +335,37 @@ fls, tru :: Type
 fls = mkTyConTy promotedFalseDataCon
 tru = mkTyConTy promotedTrueDataCon
 
+-- | After filling in evidence for a constraint, compute which Givens the
+-- evidence depends on.
+usedGivenCoercions :: [ Ct ] -> EvExpr -> [ Coercion ]
+usedGivenCoercions givens ev = mapMaybe dep_cv givens
+  where
+    dep_cv :: Ct -> Maybe Coercion
+    dep_cv ct
+      | ctEv@( CtGiven {} ) <- ctEvidence ct
+      , EqPred {} <- classifyPredType ( ctPred ct )
+      , let v = ctEvEvId ctEv
+      , v `elemVarSet` ev_cvs
+      = Just $ mkCoVarCo v
+      | otherwise
+      = Nothing
+    ev_cvs :: CoVarSet
+    ev_cvs = filterVarSet isCoVar $ exprFreeVars ev
+
+-- | Small utility wrapper around 'ctev_dest' to avoid incomplete record
+-- selector warnings.
+wantedEvDest :: HasDebugCallStack => CtEvidence -> TcEvDest
+wantedEvDest ( CtWanted { ctev_dest = dst } ) = dst
+wantedEvDest g@( CtGiven {} ) =
+  pprPanic "wantedEvDest called on CtGiven" (ppr g)
+
 --------------------------------------------------------------------------------
 
 rewriter :: PluginDefs -> UniqFM TyCon TcPluginRewriter
 rewriter defs@( PluginDefs { isSatTyCon } )
   = listToUFM [ ( isSatTyCon, isSatRewriter defs ) ]
 
-isSatRewriter :: PluginDefs -> [Ct] -> [Type] -> TcPluginM Rewrite TcPluginRewriteResult
+isSatRewriter :: PluginDefs -> [ Ct ] -> [ Type ] -> TcPluginM Rewrite TcPluginRewriteResult
 isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
   tcPluginTrace "IfSat rewriter {" (ppr givens $$ ppr ct_ty)
   rewriteEnv <- askRewriteEnv
@@ -346,8 +373,9 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
   let
     ct :: Ct
     ct = mkNonCanonical ct_ev
+  evBindsVar <- unsafeLiftTcM newTcEvBinds
   -- Start a new Solver run.
-  ( redn, _ ) <- unsafeLiftTcM $ runTcS $ do
+  redn <- unsafeLiftTcM $ runTcSWithEvBinds evBindsVar $ do
 
     -- Add back all the Givens.
     traceTcS "IfSat rewriter: adding Givens to the inert set" (ppr givens)
@@ -363,23 +391,31 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
     -- Try to solve 'ct', using both Givens and top-level instances.
     residual_wc <- solveSimpleWanteds ( unitBag ct )
 
+    mb_ct_evTerm <- lookupEvTerm evBindsVar $ wantedEvDest ct_ev
+
     -- Reset the solver state to before we attempted to solve 'ct',
     -- and undo any type variable unifications that happened.
     restoreTcS
     wrapTcS $ for_ ct_unfilled_metas \ meta ->
       writeTcRef ( metaTyVarRef meta ) Flexi
 
-    -- When there are residual Wanteds, we couldn't solve the constraint.
     let
       is_sat :: Bool
-      is_sat = isEmptyWC residual_wc
       sat :: Type
-      sat
-        | is_sat
-        = mkTyConTy promotedTrueDataCon
+      deps :: [ Coercion ]
+      ( is_sat, sat, deps )
+        | Just ( EvExpr ct_evExpr ) <- mb_ct_evTerm
+        , isEmptyWC residual_wc
+        = ( True, mkTyConTy promotedTrueDataCon, usedGivenCoercions givens ct_evExpr )
         | otherwise
-        = mkTyConTy promotedFalseDataCon
-    pure $ mkTyFamAppReduction ( "IsSat: " <> show is_sat ) Nominal isSatTyCon [ct_ty] sat
+        = ( False, mkTyConTy promotedFalseDataCon, [] )
+    pure $
+      mkTyFamAppReduction ( "IsSat: " <> show is_sat )
+        Nominal
+        deps
+        isSatTyCon
+        [ct_ty]
+        sat
 
   tcPluginTrace "IfSat rewriter }" ( ppr redn )
   pure $ TcPluginRewriteTo redn []

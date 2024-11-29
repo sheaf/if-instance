@@ -1,4 +1,9 @@
 
+# Version 0.5.2.0 (2024-11-29)
+
+- Update to support GHC 9.10 and 9.12.  
+  Now requires `ghc-tcplugin-api` 0.13 or above.
+
 # Version 0.5.1.0 (2023-08-30)
 
 - Be more thorough when resetting GHC solver monad state. This should ensure
