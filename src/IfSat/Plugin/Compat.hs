@@ -84,7 +84,6 @@ wrapTcS :: TcM a -> TcS a
 wrapTcS = unsafeCoerce const
 #endif
 
-
 -- Obtain the 'TcSEnv' underlying the 'TcS' monad (in the form of a 'ShimTcSEnv').
 getShimTcSEnv :: TcS ShimTcSEnv
 getShimTcSEnv = unsafeCoerce ( return :: ShimTcSEnv -> TcM ShimTcSEnv )
