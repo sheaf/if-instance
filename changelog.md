@@ -1,4 +1,9 @@
 
+# Version 0.6.0.0 (2025-03-29)
+
+- Fixed the treatment of constraints containing coercion variables; the plugin
+  will no longer crash upon encountering such constraints.
+
 # Version 0.5.2.0 (2024-11-29)
 
 - Update to support GHC 9.10 and 9.12.  

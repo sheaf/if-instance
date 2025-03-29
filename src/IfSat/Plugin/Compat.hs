@@ -1,38 +1,61 @@
-{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE CPP #-}
+
+{-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeApplications #-}
 
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 module IfSat.Plugin.Compat
-  ( wrapTcS, getRestoreTcS )
+  ( -- * Dealing with TcS state
+    wrapTcS, getRestoreTcS
+    -- * Dealing with mutable references
+  , UnfilledRef(..), unfilledRefsOfType, unfillMutableRef
+  )
   where
 
 -- base
+import Control.Monad
+  ( when )
 import Unsafe.Coerce
   ( unsafeCoerce )
 
 -- ghc
+import GHC.Core.Coercion
+  ( mkCoVarCo, mkHoleCo, coVarName, coHoleCoVar )
+import GHC.Core.Type
+  ( TyCoMapper(..), mapTyCo )
 #if MIN_VERSION_ghc(9,4,0)
 import GHC.Tc.Solver.InertSet
-  ( WorkList, InertSet )
+  ( WorkList )
 #endif
-import GHC.Tc.Solver.Monad
-  ( TcS
 #if MIN_VERSION_ghc(9,1,0)
-  , TcLevel, wrapTcS
+import GHC.Tc.Solver.Monad
+  ( wrapTcS )
 #endif
 #if !MIN_VERSION_ghc(9,4,0)
-  , WorkList, InertSet
+import GHC.Tc.Solver.Monad
+  ( WorkList )
 #endif
-  )
 import GHC.Tc.Types
   ( TcM, TcRef )
+
+import GHC.Tc.Utils.TcMType
+  ( isUnfilledMetaTyVar )
+import GHC.Tc.Utils.TcType
+  ( MetaDetails(..), metaTyVarRef )
 import GHC.Tc.Types.Evidence
   ( EvBindsVar(..) )
 
+-- transformers
+import Control.Monad.Trans.Class ( lift )
+import Control.Monad.Trans.Writer.CPS ( WriterT )
+import qualified Control.Monad.Trans.Writer.CPS as Writer
+
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
-  ( readTcRef, writeTcRef )
+import GHC.Types.Name.Env
+import GHC.Types.Var (tyVarName)
 
 --------------------------------------------------------------------------------
 
@@ -107,3 +130,63 @@ data ShimTcSEnv
 #endif
   , shim_tcs_worklist           :: TcRef WorkList
   }
+
+--------------------------------------------------------------------------------
+
+-- | A mutable reference that was originally unfilled
+data UnfilledRef
+  -- | A metavariable that was originally unfilled
+  = UnfilledMeta   !( TcRef MetaDetails )
+  -- | A coercion hole that was originally unfilled
+  | UnfilledCoHole !( TcRef ( Maybe Coercion ) )
+
+-- | Gather all the unfilled mutable references of a type: unfilled
+-- metavariables and unfilled coercion holes.
+unfilledRefsOfType :: TcType -> TcM [ UnfilledRef ]
+unfilledRefsOfType ty0
+  = fmap
+#if MIN_VERSION_ghc(9,3,0)
+      nonDetNameEnvElts
+#else
+      nameEnvElts
+#endif
+  $ Writer.execWriterT
+  $ go_ty ty0
+  where
+    (go_ty, _go_tys, _go_co, _go_cos) =
+      mapTyCo @( WriterT ( NameEnv UnfilledRef ) TcM ) $
+        -- Use a NameEnv to avoid collecting the same reference twice
+        -- (not that it would be particularly harmful to do so).
+        TyCoMapper
+          { tcm_tyvar = \ _ tv -> do
+              unfilled_meta <- lift $ isUnfilledMetaTyVar tv
+              when unfilled_meta do
+                let nm = tyVarName tv
+                    ref = UnfilledMeta $ metaTyVarRef tv
+                Writer.tell $ unitNameEnv nm ref
+              return $ mkTyVarTy tv
+          , tcm_tycobinder =
+#if MIN_VERSION_ghc(9,7,0)
+              \ () tv _ftf k -> k () tv
+#else
+              \ () tv _af -> return ( (), tv )
+#endif
+          , tcm_tycon = return
+          , tcm_covar = \ _ cv -> return $ mkCoVarCo cv
+          , tcm_hole = \ _ hole@(CoercionHole { ch_ref = hole_ref }) -> do
+              hole_contents <- lift $ readTcRef hole_ref
+              case hole_contents of
+                Nothing -> do
+                  let nm = coVarName $ coHoleCoVar hole
+                      ref = UnfilledCoHole hole_ref
+                  Writer.tell $ unitNameEnv nm ref
+                Just {} ->
+                  return ()
+              return $ mkHoleCo hole
+          }
+
+-- | Restore a mutable reference to the unfilled state.
+unfillMutableRef :: UnfilledRef -> TcM ()
+unfillMutableRef = \case
+  UnfilledMeta   ref  -> writeTcRef ref  Flexi
+  UnfilledCoHole hole -> writeTcRef hole Nothing

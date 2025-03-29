@@ -1,5 +1,6 @@
-{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE CPP #-}
+
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -10,10 +11,8 @@ module IfSat.Plugin
   where
 
 -- base
-import Control.Monad
-  ( filterM )
 import Data.Foldable
-  ( for_ )
+  ( traverse_ )
 import Data.Maybe
   ( catMaybes, mapMaybe )
 
@@ -35,12 +34,8 @@ import GHC.Tc.Types
   ( TcM )
 import GHC.Tc.Types.Constraint
   ( isEmptyWC, CtEvidence (..), ctEvEvId )
-import GHC.Tc.Utils.TcType
-  ( MetaDetails(..), metaTyVarRef
-  , tyCoVarsOfTypeList
-  )
 import GHC.Tc.Utils.TcMType
-  ( isUnfilledMetaTyVar, newTcEvBinds )
+  ( newTcEvBinds )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
@@ -49,7 +44,9 @@ import GHC.TcPlugin.API.Internal
 
 -- if-instance
 import IfSat.Plugin.Compat
-  ( wrapTcS, getRestoreTcS )
+  ( wrapTcS, getRestoreTcS
+  , unfilledRefsOfType, unfillMutableRef
+  )
 
 --------------------------------------------------------------------------------
 -- Plugin definition.
@@ -151,9 +148,7 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
 
       -- Keep track of the current solver state in order to backtrack
       -- in the event that our attempt at solving 'ct_l' fails.
-      ct_l_unfilled_metas <- wrapTcS
-                           $ filterM isUnfilledMetaTyVar
-                           $ tyCoVarsOfTypeList ct_l_ty
+      ct_l_unfilled <- wrapTcS $ unfilledRefsOfType ct_l_ty
       restoreTcS <- getRestoreTcS
 
       -- Try to solve 'ct_l', using both Givens and top-level instances.
@@ -183,11 +178,8 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
           -- Reset the solver state to before we attempted to solve 'ct_l',
           -- and undo any type variable unifications that happened.
           restoreTcS
-          wrapTcS $ for_ ct_l_unfilled_metas \ meta ->
-            writeTcRef ( metaTyVarRef meta ) Flexi
-          ct_r_unfilled_metas <- wrapTcS
-                               $ filterM isUnfilledMetaTyVar
-                               $ tyCoVarsOfTypeList ct_r_ty
+          wrapTcS $ traverse_ unfillMutableRef ct_l_unfilled
+          ct_r_unfilled <- wrapTcS $ unfilledRefsOfType ct_r_ty
 
           -- Try to solve 'ct_r', using both Givens and top-level instances.
           residual_ct_r <- solveSimpleWanteds ( unitBag ct_r )
@@ -212,8 +204,7 @@ solveWanted defs@( PluginDefs { orClass } ) givens wanted
               -- Reset the solver state to before we attempted to solve 'ct_r',
               -- and undo any type variable unifications that happened.
               restoreTcS
-              wrapTcS $ for_ ct_r_unfilled_metas \ meta ->
-                writeTcRef ( metaTyVarRef meta ) Flexi
+              wrapTcS $ traverse_ unfillMutableRef ct_r_unfilled
 
               pure Nothing
       pure $ ( , wanted ) <$> mb_wanted_evTerm
@@ -356,8 +347,8 @@ usedGivenCoercions givens ev = mapMaybe dep_cv givens
 -- selector warnings.
 wantedEvDest :: HasDebugCallStack => CtEvidence -> TcEvDest
 wantedEvDest ( CtWanted { ctev_dest = dst } ) = dst
-wantedEvDest g@( CtGiven {} ) =
-  pprPanic "wantedEvDest called on CtGiven" (ppr g)
+wantedEvDest non_wtd =
+  pprPanic "wantedEvDest, but not a Wanted Ct" (ppr non_wtd)
 
 --------------------------------------------------------------------------------
 
@@ -383,9 +374,7 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
 
     -- Keep track of the current solver state in order to undo any
     -- side-effects after calling 'solveSimpleWanteds' on 'ct'.
-    ct_unfilled_metas <- wrapTcS
-                       $ filterM isUnfilledMetaTyVar
-                       $ tyCoVarsOfTypeList ct_ty
+    ct_unfilled <- wrapTcS $ unfilledRefsOfType ct_ty
     restoreTcS <- getRestoreTcS
 
     -- Try to solve 'ct', using both Givens and top-level instances.
@@ -396,8 +385,7 @@ isSatRewriter ( PluginDefs { isSatTyCon } ) givens [ct_ty] = do
     -- Reset the solver state to before we attempted to solve 'ct',
     -- and undo any type variable unifications that happened.
     restoreTcS
-    wrapTcS $ for_ ct_unfilled_metas \ meta ->
-      writeTcRef ( metaTyVarRef meta ) Flexi
+    wrapTcS $ traverse_ unfillMutableRef ct_unfilled
 
     let
       is_sat :: Bool
